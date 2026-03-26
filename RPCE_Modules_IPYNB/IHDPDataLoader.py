@@ -17,8 +17,7 @@ def create_ihdp_rct_obs_datasets(
     bias_strength=1.0,
     noise_std=0.1,
     standardize_for_propensity=True,
-    return_numpy=False,
-    slice=0
+    return_numpy=False
 ):
     """
     Split one IHDP training replication into an RCT-like subset and an OBS-like subset
@@ -81,7 +80,7 @@ def create_ihdp_rct_obs_datasets(
     mu1 = data["mu1"][:, replication]         # shape: (n,)
 
     n = X.shape[0]
-    if not (0.0 < rct_fraction < 1.0):
+    if not (0.0 <= rct_fraction <= 1.0):
         raise ValueError("rct_fraction must be between 0 and 1.")
 
     # ---- Random split into RCT vs OBS groups ----

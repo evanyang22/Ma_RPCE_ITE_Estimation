@@ -87,7 +87,10 @@ def train_mixed_autoencoder(
     num_epochs=50,
     verbose=True,
     device=None,
-    outcome_type="binary"
+    outcome_type="binary",
+    alpha_recon= 0.1,
+    alpha_outcome= 1,
+    alpha_prop=0.5
 ):
     """
     Train an autoencoder on a TensorDataset(X, t, y) or TensorDataset(X).
@@ -157,22 +160,29 @@ def train_mixed_autoencoder(
                 cont_pred = outputs["x_recon"][:, continuous_idx]
                 cont_true = X_batch[:, continuous_idx]
                 cont_loss = mse(cont_pred, cont_true)
-                loss = loss + cont_loss
+                loss = loss + alpha_recon * cont_loss
 
             if len(binary_idx) > 0:
                 bin_pred = outputs["x_recon"][:, binary_idx]   # logits
                 bin_true = X_batch[:, binary_idx]
                 bin_loss = bce(bin_pred, bin_true)
-                loss = loss + bin_loss
+                loss = loss + alpha_recon * bin_loss
 
             #Propensity training
             T_batch = T_batch.unsqueeze(1).float()
             propensity_loss= prop(outputs["t_logit"],T_batch)
-            loss+=propensity_loss
+            loss+=alpha_prop * propensity_loss
 
+            '''
             u_hat = T_batch.mean()
             u_hat = torch.clamp(u_hat, min=1e-6, max=1-1e-6)
             w_i = T_batch / (2 * u_hat) + (1 - T_batch) / (2 * (1 - u_hat))
+            '''
+
+            e_hat = torch.sigmoid(outputs["t_logit"]).detach()   # per-individual e(x_i)
+            e_hat = torch.clamp(e_hat, min=0.05, max=0.95)       # stabilize extremes
+            w_i = T_batch / (2*e_hat) + (1-T_batch) / (2*(1-e_hat))
+            w_i = w_i / w_i.mean().clamp_min(1e-8)               # normalize within batch
             #pseudooutcome training
             Y_batch = Y_batch.float().view(-1, 1)
             pseudo_loss = pseudo_outcome_loss(
@@ -183,7 +193,7 @@ def train_mixed_autoencoder(
                 weights=w_i,
                 outcome_type=outcome_type
             )
-            loss +=pseudo_loss
+            loss +=alpha_outcome * pseudo_loss
             
             optimizer.zero_grad()
             loss.backward()

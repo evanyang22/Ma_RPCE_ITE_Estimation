@@ -1,11 +1,14 @@
 
 import torch
-from OptimalTransportFunctions import sinkhorn_projection
+from OptimalTransportFunctions import sinkhorn_projection, sinkhorn_projection_balanced, sinkhorn_projection_balanced_better
 from Confidence import compute_confidence
 from TrainingFunctionsStage1 import detect_binary_continuous_columns
 from torch.utils.data import DataLoader
 #import matplotlib.pyplot as plt
 import torch.nn as nn
+from typing import Union
+import numpy as np
+import pandas as pd
 
 @torch.no_grad()
 def predict_cate_rpce(model, x_obs, x_rct, outcome_type='continuous', device='cpu'):
@@ -26,7 +29,7 @@ def predict_cate_rpce(model, x_obs, x_rct, outcome_type='continuous', device='cp
     z_rct = model.encoder(x_rct)
 
     # OT projection
-    z_tilde, pi_star = sinkhorn_projection(z_obs, z_rct)
+    z_tilde, pi_star = sinkhorn_projection_balanced_better(z_obs, z_rct)
     z_tilde = z_tilde.to(device)
     pi_star = pi_star.to(device)
 
@@ -607,3 +610,122 @@ def test_mixed_autoencoder(
         print(f"Continuous columns:  {metrics['continuous_idx']}")
 
     return metrics
+
+
+def calculate_ate_error(mu1: Union[np.ndarray, pd.Series], 
+                        mu0: Union[np.ndarray, pd.Series],
+                        predicted_ite: Union[np.ndarray, pd.Series]) -> float:
+    """
+    Calculate ATE Error (Average Treatment Effect Error).
+    
+    The ATE error is the absolute difference between the estimated average
+    treatment effect and the true average treatment effect.
+    
+    Formula: ε_ATE = |ÂTE - ATE|
+    where:
+        ATE = mean(μ₁ - μ₀)           [true average treatment effect]
+        ÂTE = mean(predicted_ite)      [estimated average treatment effect]
+    
+    Parameters
+    ----------
+    mu1 : array-like
+        True potential outcomes under treatment (T=1)
+    mu0 : array-like
+        True potential outcomes under control (T=0)
+    predicted_ite : array-like
+        Model's predicted individual treatment effects
+    
+    Returns
+    -------
+    float
+        ATE error (lower is better)
+    
+    Examples
+    --------
+    >>> mu1 = np.array([10, 12, 15])
+    >>> mu0 = np.array([5, 6, 8])
+    >>> predicted_ite = np.array([4.5, 5.5, 6.5])
+    >>> calculate_ate_error(mu1, mu0, predicted_ite)
+    0.5
+    
+    >>> # With pandas DataFrame
+    >>> import pandas as pd
+    >>> df = pd.read_excel('data.xlsx')
+    >>> ate_error = calculate_ate_error(df['mu1'], df['mu0'], df['RPCE_CATE'])
+    >>> print(f"ATE Error: {ate_error:.6f}")
+    """
+    # Convert to numpy arrays (handle pandas Series properly)
+    mu1 = mu1.to_numpy() if isinstance(mu1, pd.Series) else np.asarray(mu1)
+    mu0 = mu0.to_numpy() if isinstance(mu0, pd.Series) else np.asarray(mu0)
+    predicted_ite = predicted_ite.to_numpy() if isinstance(predicted_ite, pd.Series) else np.asarray(predicted_ite)
+    
+    # Calculate true ATE
+    true_ite = mu1 - mu0
+    true_ate = np.mean(true_ite)
+    
+    # Calculate estimated ATE
+    estimated_ate = np.mean(predicted_ite)
+    
+    # Calculate absolute error
+    ate_error = abs(estimated_ate - true_ate)
+    
+    return float(ate_error)
+ 
+ 
+def calculate_pehe(mu1: Union[np.ndarray, pd.Series], 
+                   mu0: Union[np.ndarray, pd.Series],
+                   predicted_ite: Union[np.ndarray, pd.Series]) -> float:
+    """
+    Calculate PEHE (Precision in Estimation of Heterogeneous Effect).
+    
+    PEHE is the root mean squared error (RMSE) between predicted and true
+    individual treatment effects. It measures how well the model captures
+    heterogeneous treatment effects across individuals.
+    
+    Formula: PEHE = √[(1/n) × Σ(predicted_iteᵢ - true_iteᵢ)²]
+    where:
+        true_iteᵢ = μ₁(xᵢ) - μ₀(xᵢ)   [true individual treatment effect]
+    
+    Parameters
+    ----------
+    mu1 : array-like
+        True potential outcomes under treatment (T=1)
+    mu0 : array-like
+        True potential outcomes under control (T=0)
+    predicted_ite : array-like
+        Model's predicted individual treatment effects
+    
+    Returns
+    -------
+    float
+        PEHE (lower is better)
+    
+    Examples
+    --------
+    >>> mu1 = np.array([10, 12, 15])
+    >>> mu0 = np.array([5, 6, 8])
+    >>> predicted_ite = np.array([4.5, 5.5, 6.5])
+    >>> calculate_pehe(mu1, mu0, predicted_ite)
+    0.5
+    
+    >>> # With pandas DataFrame
+    >>> import pandas as pd
+    >>> df = pd.read_excel('data.xlsx')
+    >>> pehe = calculate_pehe(df['mu1'], df['mu0'], df['RPCE_CATE'])
+    >>> print(f"PEHE: {pehe:.6f}")
+    """
+    # Convert to numpy arrays (handle pandas Series properly)
+    mu1 = mu1.to_numpy() if isinstance(mu1, pd.Series) else np.asarray(mu1)
+    mu0 = mu0.to_numpy() if isinstance(mu0, pd.Series) else np.asarray(mu0)
+    predicted_ite = predicted_ite.to_numpy() if isinstance(predicted_ite, pd.Series) else np.asarray(predicted_ite)
+    
+    # Calculate true ITE
+    true_ite = mu1 - mu0
+    
+    # Calculate individual errors
+    errors = predicted_ite - true_ite
+    
+    # Calculate RMSE (PEHE)
+    pehe = np.sqrt(np.mean(errors ** 2))
+    
+    return float(pehe)
